@@ -995,55 +995,37 @@ build_libwebp() {
 }
 
 build_harfbuzz() {
-  local new_build=false
   do_git_checkout https://github.com/harfbuzz/harfbuzz.git harfbuzz_git "origin/main"
   if [ ! -f harfbuzz_git/already_done_harf ]; then # Not done or new master, so build
-    new_build=true
-  fi
-
-  # basically gleaned from https://gist.github.com/roxlu/0108d45308a0434e27d4320396399153
-  build_freetype "--without-harfbuzz" $new_build # Check for initial or new freetype or force rebuild if needed
-  local new_freetype=$?
-  if $new_build || [ $new_freetype = 0 ]; then # 0 is true
-    rm -f harfbuzz_git/already* # Force rebuilding in case only freetype has changed
     # cmake no .pc file generated so use configure :|
     cd harfbuzz_git
       if [ ! -f configure ]; then
         ./autogen.sh # :|
       fi
       export LDFLAGS=-lpthread # :|
-      generic_configure "--with-freetype=yes --with-fontconfig=no --with-icu=no" # no fontconfig, don't want another circular what? icu is #372
+      generic_configure "--with-icu=no" # no fontconfig, don't want another circular what? icu is #372
       unset LDFLAGS
       do_make_and_make_install
     cd ..
 
-    build_freetype "--with-harfbuzz" true # with harfbuzz now...
     touch harfbuzz_git/already_done_harf
+    rm -f freetype-2.10.4/already_done_freetype
     echo "Done harfbuzz"
   else
     echo "Already done harfbuzz"
   fi
-  sed -i.bak 's/-lfreetype.*/-lfreetype -lharfbuzz -lpthread/' "$PKG_CONFIG_PATH/freetype2.pc" # for some reason it lists harfbuzz as Requires.private only??
-  sed -i.bak 's/-lharfbuzz.*/-lharfbuzz -lfreetype/' "$PKG_CONFIG_PATH/harfbuzz.pc" # does anything even use this?
-  sed -i.bak 's/libfreetype.la -lbz2/libfreetype.la -lharfbuzz -lbz2/' "${mingw_w64_x86_64_prefix}/lib/libfreetype.la" # XXX what the..needed?
-  sed -i.bak 's/libfreetype.la -lbz2/libfreetype.la -lharfbuzz -lbz2/' "${mingw_w64_x86_64_prefix}/lib/libharfbuzz.la"
 }
 
 build_freetype() {
-  local force_build=$2
-  local new_build=1
-  if [[ ! -f freetype-2.10.4/already_done_freetype || $force_build = true ]]; then
+  if [[ ! -f freetype-2.10.4/already_done_freetype ]]; then
     download_and_unpack_file https://sourceforge.net/projects/freetype/files/freetype2/2.10.4/freetype-2.10.4.tar.xz
-    rm -f freetype-2.10.4/already*
     cd freetype-2.10.4
         # harfbuzz autodetect :|
         generic_configure "--with-bzip2 $1"
         do_make_and_make_install
         touch already_done_freetype
-        new_build=0
     cd ..
   fi
-  return $new_build # Give caller a way to know if a new build was done
 }
 
 build_libxml2() {
@@ -2567,11 +2549,13 @@ build_ffmpeg_dependencies() {
   #build_libjpeg_turbo # mplayer can use this, VLC qt might need it? [replaces libjpeg] (ffmpeg seems to not need it so commented out here)
   build_libpng # Needs zlib >= 1.0.4. Uses dlfcn.
   build_libwebp # Uses dlfcn.
-  build_harfbuzz
+  build_freetype
   # harf does now include build_freetype # Uses zlib, bzip2, and libpng.
   build_libxml2 # Uses zlib, liblzma, iconv and dlfcn.
   build_libvmaf
   build_fontconfig # Needs freetype and libxml >= 2.6. Uses iconv and dlfcn.
+  build_harfbuzz
+  build_freetype
   build_gmp # For rtmp support configure FFmpeg with '--enable-gmp'. Uses dlfcn.
   #build_librtmfp # mainline ffmpeg doesn't use it yet
   build_libnettle # Needs gmp >= 3.0. Uses dlfcn.
