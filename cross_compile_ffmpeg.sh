@@ -101,6 +101,9 @@ check_missing_packages () {
           apt_pkgs="$apt_pkgs python-is-python3" # needed
         fi
         echo "$ sudo apt-get install $apt_pkgs -y"
+        if uname -a | grep  -q -- "-microsoft" ; then
+         echo NB if you use WSL Ubuntu 20.04 you need to do an extra step: https://github.com/rdp/ffmpeg-windows-build-helpers/issues/452
+	fi
         ;;
       debian)
         echo "for debian:"
@@ -215,6 +218,7 @@ check_missing_packages () {
       Please update via windows update then try again"
       exit 1
     fi
+    echo "for WSL ubuntu 20.04 you need to do an extra step https://github.com/rdp/ffmpeg-windows-build-helpers/issues/452"
   fi
 
 }
@@ -438,7 +442,7 @@ do_git_checkout() {
   fi
   new_git_version=`git rev-parse HEAD`
   if [[ "$old_git_version" != "$new_git_version" ]]; then
-    echo "got upstream changes, forcing re-configure. Doing git clean -f"
+    echo "got upstream changes, forcing re-configure. Doing git clean"
     git_hard_reset
   else
     echo "fetched no code changes, not forcing reconfigure for that..."
@@ -448,7 +452,7 @@ do_git_checkout() {
 
 git_hard_reset() {
   git reset --hard # throw away results of patch files
-  git clean -f # throw away local changes; 'already_*' and bak-files for instance.
+  git clean -fx # throw away local changes; 'already_*' and bak-files for instance.
 }
 
 get_small_touchfile_name() { # have to call with assignment like a=$(get_small...)
@@ -841,7 +845,7 @@ build_amd_amf_headers() {
 }
 
 build_nv_headers() {
-  do_git_checkout https://git.videolan.org/git/ffmpeg/nv-codec-headers.git
+  do_git_checkout https://github.com/FFmpeg/nv-codec-headers.git
   cd nv-codec-headers_git
     do_make_install "PREFIX=$mingw_w64_x86_64_prefix" # just copies in headers
   cd ..
@@ -866,7 +870,7 @@ build_intel_quicksync_mfx() { # i.e. qsv, disableable via command line switch...
 
 build_libleptonica() {
   build_libjpeg_turbo
-  do_git_checkout https://github.com/DanBloomberg/leptonica.git leptonica_git 1.80.0
+  do_git_checkout https://github.com/DanBloomberg/leptonica.git leptonica_git 1.82.0
   cd leptonica_git
     export CPPFLAGS="-DOPJ_STATIC"
     generic_configure_make_install
@@ -1075,13 +1079,13 @@ build_fontconfig() {
 }
 
 build_gmp() {
-  download_and_unpack_file https://ftp.gnu.org/pub/gnu/gmp/gmp-6.2.0.tar.xz
-  cd gmp-6.2.0
-    #export CC_FOR_BUILD=/usr/bin/gcc # Are these needed?
-    #export CPP_FOR_BUILD=usr/bin/cpp
+  download_and_unpack_file https://ftp.gnu.org/pub/gnu/gmp/gmp-6.2.1.tar.xz
+  cd gmp-6.2.1
+    export CC_FOR_BUILD=/usr/bin/gcc # WSL seems to need this..
+    export CPP_FOR_BUILD=usr/bin/cpp
     generic_configure "ABI=$bits_target"
-    #unset CC_FOR_BUILD
-    #unset CPP_FOR_BUILD
+    unset CC_FOR_BUILD
+    unset CPP_FOR_BUILD
     do_make_and_make_install
   cd ..
 }
@@ -1435,9 +1439,8 @@ build_libbluray() {
       local local_git_version=`git --git-dir=.git/modules/contrib/libudfread rev-parse HEAD`
       local remote_git_version=`git ls-remote -h https://code.videolan.org/videolan/libudfread.git | sed "s/[[:space:]].*//"`
       if [[ "$local_git_version" != "$remote_git_version" ]]; then
-        echo "doing git clean -f"
-        git clean -f # Throw away local changes; 'already_*' in this case.
-        git submodule foreach -q 'git clean -f' # Throw away local changes; 'already_configured_*' and 'udfread.c.bak' in this case.
+        echo "detected upstream udfread changed, attempted to update submodules" # XXX use do_git_checkout here instead somehow?
+        git submodule foreach -q 'git clean -fx' # Throw away local changes; 'already_configured_*' and 'udfread.c.bak' in this case.
         rm -f contrib/libudfread/src/udfread-version.h
         git submodule update --remote -f # Checkout even if the working tree differs from HEAD.
       fi
@@ -1469,7 +1472,7 @@ build_libbs2b() {
 }
 
 build_libsoxr() {
-  do_git_checkout https://git.code.sf.net/p/soxr/code soxr_git
+  do_git_checkout https://github.com/chirlu/soxr.git soxr_git
   cd soxr_git
     do_cmake_and_install "-DHAVE_WORDS_BIGENDIAN_EXITCODE=0 -DWITH_OPENMP=0 -DBUILD_TESTS=0 -DBUILD_EXAMPLES=0"
   cd ..
@@ -2095,7 +2098,7 @@ build_vlc() {
   rm -f already_ran_make* # try to force re-link just in case...
   do_make
   # do some gymnastics to avoid building the mozilla plugin for now [couldn't quite get it to work]
-  #sed -i.bak 's_git://git.videolan.org/npapi-vlc.git_https://github.com/rdp/npapi-vlc.git_' Makefile # this wasn't enough...
+  #sed -i.bak 's_git://git.videolan.org/npapi-vlc.git_https://github.com/rdp/npapi-vlc.git_' Makefile # this wasn't enough...following lines instead...
   sed -i.bak "s/package-win-common: package-win-install build-npapi/package-win-common: package-win-install/" Makefile
   sed -i.bak "s/.*cp .*builddir.*npapi-vlc.*//g" Makefile
   make package-win-common # not do_make, fails still at end, plus this way we get new vlc.exe's
@@ -2295,6 +2298,10 @@ build_ffmpeg() {
     postpend_configure_opts="--enable-static --disable-shared --prefix=${install_prefix}"
   fi
 
+  if [[ $ffmpeg_git_checkout_version == *"n4.4"* ]] || [[ $ffmpeg_git_checkout_version == *"n4.3"* ]] || [[ $ffmpeg_git_checkout_version == *"n4.2"* ]]; then
+    postpend_configure_opts="${postpend_configure_opts} --disable-libdav1d " # dav1d has diverged since
+  fi
+
   cd $output_dir
     apply_patch file://$patch_dir/frei0r_load-shared-libraries-dynamically.diff
     if [ "$bits_target" != "32" ]; then
@@ -2310,7 +2317,6 @@ build_ffmpeg() {
       elif [[ $ffmpeg_git_checkout_version == *"n4.4"* ]] || [[ $ffmpeg_git_checkout_version == *"n4.3"* ]] || [[ $ffmpeg_git_checkout_version == *"n4.2"* ]]; then
         git apply "$work_dir/SVT-HEVC_git/ffmpeg_plugin/n4.4-0001-lavc-svt_hevc-add-libsvt-hevc-encoder-wrapper.patch"
         git apply "$patch_dir/SVT-HEVC-0002-doc-Add-libsvt_hevc-encoder-docs.patch"  # upstream patch does not apply on current ffmpeg master
-        postpend_configure_opts="${postpend_configure_opts} --disable-libdav1d " # dav1d has diverged since
       else
         # PUT PATCHES FOR OTHER VERSIONS HERE
         :
