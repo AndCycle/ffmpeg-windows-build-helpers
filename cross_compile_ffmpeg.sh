@@ -344,7 +344,7 @@ install_cross_compiler() {
 
     # --disable-shared allows c++ to be distributed at all...which seemed necessary for some random dependency which happens to use/require c++...
     local zeranoe_script_name=mingw-w64-build-r22.local
-    local zeranoe_script_options="--gcc-ver=10.2.0 --mingw-w64-ver=8.0.0 --default-configure --cpu-count=$gcc_cpu_count --disable-shared --clean-build --verbose --allow-overwrite --threads=winpthreads" # allow-overwrite to avoid some crufty prompts if I do rebuilds [or maybe should just nuke everything...]
+    local zeranoe_script_options="--gcc-ver=10.2.0 --mingw-w64-ver=9.0.0 --default-configure --cpu-count=$gcc_cpu_count --disable-shared --clean-build --verbose --allow-overwrite --threads=winpthreads" # allow-overwrite to avoid some crufty prompts if I do rebuilds [or maybe should just nuke everything...]
     if [[ ($compiler_flavors == "win32" || $compiler_flavors == "multi") && ! -f ../$win32_gcc ]]; then
       echo "Building win32 cross compiler..."
       download_gcc_build_script $zeranoe_script_name
@@ -415,7 +415,7 @@ do_git_checkout() {
   if [ ! -d $to_dir ]; then
     echo "Downloading (via git clone) $to_dir from $repo_url"
     rm -rf $to_dir.tmp # just in case it was interrupted previously...
-    git clone $repo_url $to_dir.tmp || exit 1
+    git clone $repo_url $to_dir.tmp --recurse-submodules || exit 1
     # prevent partial checkouts by renaming it only after success
     mv $to_dir.tmp $to_dir
     echo "done git cloning to $to_dir"
@@ -512,7 +512,7 @@ do_make() {
     nice make $extra_make_options || exit 1
     touch $touch_name || exit 1 # only touch if the build was OK
   else
-    echo "Already made $(basename "$cur_dir2") ..."
+    echo "Already made $(dirname "$cur_dir2") $(basename "$cur_dir2") ..."
   fi
 }
 
@@ -582,7 +582,7 @@ do_meson() {
     fi
     local cur_dir2=$(pwd)
     local english_name=$(basename $cur_dir2)
-    local touch_name=$(get_small_touchfile_name already_built "$configure_options $configure_name $LDFLAGS $CFLAGS")
+    local touch_name=$(get_small_touchfile_name already_built_meson "$configure_options $configure_name $LDFLAGS $CFLAGS")
     if [ ! -f "$touch_name" ]; then
         if [ "$configure_noclean" != "noclean" ]; then
             make clean # just in case
@@ -1041,9 +1041,8 @@ build_libxml2() {
 }
 
 build_libvmaf() {
-  do_git_checkout https://github.com/Netflix/vmaf.git vmaf_git v1.5.2
+  do_git_checkout https://github.com/Netflix/vmaf.git vmaf_git v2.3.0
   cd vmaf_git
-    apply_patch file://$patch_dir/libvmaf.various-1.5.2.patch -p1
     cd libvmaf
     export CFLAGS="$CFLAGS -pthread"
     export CXXFLAGS="$CFLAGS -pthread"
@@ -1064,7 +1063,7 @@ build_libvmaf() {
     else
       rm -f ${mingw_w64_x86_64_prefix}/lib/libvmaf.dll.a
     fi
-    sed -i.bak "s/Libs.private.*/& -lstdc++/" "$PKG_CONFIG_PATH/libvmaf.pc" # .pc is still broken
+    sed -i.bak "s/Libs: .*/& -lstdc++/" "$PKG_CONFIG_PATH/libvmaf.pc" # .pc is still broken
   cd ../..
 }
 
@@ -1321,11 +1320,19 @@ build_libsndfile() {
   cd ..
 }
 
+build_mpg123() {
+  do_svn_checkout svn://scm.orgis.org/mpg123/trunk mpg123_svn r5008 # avoid Think again failure
+  cd mpg123_svn
+    generic_configure
+    do_make_and_make_install
+  cd ..
+}
+
 build_lame() {
-  do_svn_checkout https://svn.code.sf.net/p/lame/svn/trunk/lame lame_svn r6474
+  do_svn_checkout https://svn.code.sf.net/p/lame/svn/trunk/lame lame_svn 
   cd lame_svn
     sed -i.bak '1s/^\xEF\xBB\xBF//' libmp3lame/i386/nasm.h # Remove a UTF-8 BOM that breaks nasm if it's still there; should be fixed in trunk eventually https://sourceforge.net/p/lame/patches/81/
-    generic_configure "--enable-nasm"
+    generic_configure "--enable-nasm --enable-libmpg123"
     do_make_and_make_install
   cd ..
 }
@@ -1479,7 +1486,10 @@ build_libsoxr() {
 }
 
 build_libflite() {
-  download_and_unpack_file http://www.festvox.org/flite/packed/flite-2.1/flite-2.1-release.tar.bz2
+  # download_and_unpack_file http://www.festvox.org/flite/packed/flite-2.1/flite-2.1-release.tar.bz2
+  # original link is not working so using a substitute
+  # from a trusted source
+  download_and_unpack_file http://deb.debian.org/debian/pool/main/f/flite/flite_2.1-release.orig.tar.bz2 flite-2.1-release
   cd flite-2.1-release
     apply_patch file://$patch_dir/flite-2.1.0_mingw-w64-fixes.patch
     if [[ ! -f main/Makefile.bak ]]; then
@@ -1786,7 +1796,7 @@ build_avisynth() {
   mkdir -p avisynth_git/avisynth-build
   cd avisynth_git/avisynth-build
     do_cmake_from_build_dir .. -DHEADERS_ONLY:bool=on
-    do_make_install
+    do_make "$make_prefix_options VersionGen install"
   cd ../..
 }
 
@@ -1796,12 +1806,14 @@ build_libx265() {
   if [[ ! -z $x265_git_checkout_version ]]; then
     checkout_dir+="_$x265_git_checkout_version"
     do_git_checkout "$remote" $checkout_dir "$x265_git_checkout_version"
-  fi
-  if [[ $prefer_stable = "n" ]] && [[ -z $x265_git_checkout_version ]] ; then
-    do_git_checkout "$remote" $checkout_dir "origin/master"
-  fi
-  if [[ $prefer_stable = "y" ]] && [[ -z $x265_git_checkout_version ]] ; then
-    do_git_checkout "$remote" $checkout_dir "origin/stable"
+  else
+    if [[ $prefer_stable = "n" ]]; then
+      checkout_dir+="_unstable"
+      do_git_checkout "$remote" $checkout_dir "origin/master"
+    fi
+    if [[ $prefer_stable = "y" ]]; then
+      do_git_checkout "$remote" $checkout_dir "origin/stable"
+    fi
   fi
   cd $checkout_dir
 
@@ -1855,12 +1867,12 @@ SAVE
 END
 EOF
   fi
-  do_make_install
+  make install # force reinstall in case changed stable -> unstable
   cd ../..
 }
 
 build_libopenh264() {
-  do_git_checkout "https://github.com/cisco/openh264.git"
+  do_git_checkout "https://github.com/cisco/openh264.git" openh264_git 75b9fcd2669c75a99791 # wels/codec_api.h weirdness
   cd openh264_git
     sed -i.bak "s/_M_X64/_M_DISABLED_X64/" codec/encoder/core/inc/param_svc.h # for 64 bit, avoid missing _set_FMA3_enable, it needed to link against msvcrt120 to get this or something weird?
     if [[ $bits_target == 32 ]]; then
@@ -1892,9 +1904,10 @@ build_libx264() {
   checkout_dir="${checkout_dir}_all_bitdepth"
 
   if [[ $prefer_stable = "n" ]]; then
-    do_git_checkout "https://code.videolan.org/videolan/x264.git" $checkout_dir "origin/master" # During 'configure': "Found no assembler. Minimum version is nasm-2.13" so disable for now...
+    checkout_dir="${checkout_dir}_unstable"
+    do_git_checkout "https://code.videolan.org/videolan/x264.git" $checkout_dir "origin/master" 
   else
-    do_git_checkout "https://code.videolan.org/videolan/x264.git" $checkout_dir  "origin/stable" # or "origin/stable" nasm again
+    do_git_checkout "https://code.videolan.org/videolan/x264.git" $checkout_dir  "origin/stable" 
   fi
   cd $checkout_dir
     if [[ ! -f configure.bak ]]; then # Change CFLAGS.
@@ -1925,7 +1938,7 @@ build_libx264() {
       # normal path non profile guided
       do_configure "$configure_flags"
       do_make
-      do_make_install
+      make install # force reinstall in case changed stable -> unstable
     fi
 
     unset LAVF_LIBS
@@ -2213,7 +2226,7 @@ build_mp4box() { # like build_gpac
     sed -i.bak "s/`uname -s`/MINGW32/g" configure
     # XXX do I want to disable more things here?
     # ./sandbox/cross_compilers/mingw-w64-i686/bin/i686-w64-mingw32-sdl-config
-    generic_configure "--static-build --static-bin --disable-oss-audio --extra-ldflags=-municode --disable-x11 --sdl-cfg=${cross_prefix}sdl-config"
+    generic_configure "  --cross-prefix=${cross_prefix} --static-build --static-bin --disable-oss-audio --extra-ldflags=-municode --disable-x11 --sdl-cfg=${cross_prefix}sdl-config"
     ./check_revision.sh
     # I seem unable to pass 3 libs into the same config line so do it with sed...
     sed -i.bak "s/EXTRALIBS=.*/EXTRALIBS=-lws2_32 -lwinmm -lz/g" config.mak
@@ -2252,7 +2265,7 @@ build_ffmpeg() {
   local extra_postpend_configure_options=$2
   local build_type=$1
   if [[ -z $3 ]]; then
-    local output_dir="ffmpeg_git" # XXX rename ffmpeg_diry?
+    local output_dir="ffmpeg_git"
   else
     local output_dir=$3
   fi
@@ -2299,30 +2312,11 @@ build_ffmpeg() {
   fi
 
   if [[ $ffmpeg_git_checkout_version == *"n4.4"* ]] || [[ $ffmpeg_git_checkout_version == *"n4.3"* ]] || [[ $ffmpeg_git_checkout_version == *"n4.2"* ]]; then
-    postpend_configure_opts="${postpend_configure_opts} --disable-libdav1d " # dav1d has diverged since
+    postpend_configure_opts="${postpend_configure_opts} --disable-libdav1d " # dav1d has diverged since so isn't compat with older ffmpegs
   fi
 
   cd $output_dir
     apply_patch file://$patch_dir/frei0r_load-shared-libraries-dynamically.diff
-    if [ "$bits_target" != "32" ]; then
-
-      # SVT-VP9
-      # git apply "$work_dir/SVT-VP9_git/ffmpeg_plugin/master-0001-Add-ability-for-ffmpeg-to-run-svt-vp9.patch"
-
-      # SVT-HEVC
-      # Apply the correct patches based on version. Logic (n4.4 patch for n4.2, n4.3 and n4.4)  based on patch notes here:
-      # https://github.com/OpenVisualCloud/SVT-HEVC/commit/b5587b09f44bcae70676f14d3bc482e27f07b773#diff-2b35e92117ba43f8397c2036658784ba2059df128c9b8a2625d42bc527dffea1
-      if [[ $ffmpeg_git_checkout_version == *"master"* ]]; then
-        git apply "$work_dir/SVT-HEVC_git/ffmpeg_plugin/master-0001-lavc-svt_hevc-add-libsvt-hevc-encoder-wrapper.patch"
-      elif [[ $ffmpeg_git_checkout_version == *"n4.4"* ]] || [[ $ffmpeg_git_checkout_version == *"n4.3"* ]] || [[ $ffmpeg_git_checkout_version == *"n4.2"* ]]; then
-        git apply "$work_dir/SVT-HEVC_git/ffmpeg_plugin/n4.4-0001-lavc-svt_hevc-add-libsvt-hevc-encoder-wrapper.patch"
-        git apply "$patch_dir/SVT-HEVC-0002-doc-Add-libsvt_hevc-encoder-docs.patch"  # upstream patch does not apply on current ffmpeg master
-      else
-        # PUT PATCHES FOR OTHER VERSIONS HERE
-        :
-      fi
-
-    fi
     if [ "$bits_target" = "32" ]; then
       local arch=x86
     else
@@ -2342,21 +2336,36 @@ build_ffmpeg() {
       init_options+=" --disable-schannel"
       # Fix WinXP incompatibility by disabling Microsoft's Secure Channel, because Windows XP doesn't support TLS 1.1 and 1.2, but with GnuTLS or OpenSSL it does.  XP compat!
     fi
-    config_options="$init_options --enable-libcaca --enable-gray --enable-libtesseract --enable-fontconfig --enable-gmp --enable-gnutls --enable-libass --enable-libbluray --enable-libbs2b --enable-libflite --enable-libfreetype --enable-libfribidi --enable-libgme --enable-libgsm --enable-libilbc --enable-libmodplug --enable-libmp3lame --enable-libopencore-amrnb --enable-libopencore-amrwb --enable-libopus --enable-libsnappy --enable-libsoxr --enable-libspeex --enable-libtheora --enable-libtwolame --enable-libvo-amrwbenc --enable-libvorbis --enable-libwebp --enable-libzimg --enable-libzvbi --enable-libmysofa --enable-libopenjpeg  --enable-libopenh264 --enable-liblensfun  --enable-libvmaf --enable-libsrt --enable-libxml2 --enable-opengl --enable-libdav1d --enable-cuda-llvm"
+    config_options="$init_options --enable-libcaca --enable-gray --enable-libtesseract --enable-fontconfig --enable-gmp --enable-gnutls --enable-libass --enable-libbluray --enable-libbs2b --enable-libflite --enable-libfreetype --enable-libfribidi --enable-libgme --enable-libgsm --enable-libilbc --enable-libmodplug --enable-libmp3lame --enable-libopencore-amrnb --enable-libopencore-amrwb --enable-libopus --enable-libsnappy --enable-libsoxr --enable-libspeex --enable-libtheora --enable-libtwolame --enable-libvo-amrwbenc --enable-libvorbis --enable-libwebp --enable-libzimg --enable-libzvbi --enable-libmysofa --enable-libopenjpeg  --enable-libopenh264  --enable-libvmaf --enable-libsrt --enable-libxml2 --enable-opengl --enable-libdav1d --enable-cuda-llvm"
 
-    if [ "$bits_target" != "32" ]; then
-      config_options+=" --enable-libsvthevc"
-      config_options+=" --enable-libsvtav1"
-      # config_options+=" --enable-libsvtvp9"
+    if [[ $build_svt = y ]]; then
+      if [ "$bits_target" != "32" ]; then
+
+        # SVT-VP9 see comments below
+        # git apply "$work_dir/SVT-VP9_git/ffmpeg_plugin/master-0001-Add-ability-for-ffmpeg-to-run-svt-vp9.patch"
+
+        # SVT-HEVC
+        # Apply the correct patches based on version. Logic (n4.4 patch for n4.2, n4.3 and n4.4)  based on patch notes here:
+        # https://github.com/OpenVisualCloud/SVT-HEVC/commit/b5587b09f44bcae70676f14d3bc482e27f07b773#diff-2b35e92117ba43f8397c2036658784ba2059df128c9b8a2625d42bc527dffea1
+        if [[ $ffmpeg_git_checkout_version == *"n4.4"* ]] || [[ $ffmpeg_git_checkout_version == *"n4.3"* ]] || [[ $ffmpeg_git_checkout_version == *"n4.2"* ]]; then
+          git apply "$work_dir/SVT-HEVC_git/ffmpeg_plugin/n4.4-0001-lavc-svt_hevc-add-libsvt-hevc-encoder-wrapper.patch"
+          git apply "$patch_dir/SVT-HEVC-0002-doc-Add-libsvt_hevc-encoder-docs.patch"  # upstream patch does not apply on current ffmpeg master
+        elif [[ $ffmpeg_git_checkout_version == *"n4.1"* ]] || [[ $ffmpeg_git_checkout_version == *"n3.4"* ]] || [[ $ffmpeg_git_checkout_version == *"n3.2"* ]] || [[ $ffmpeg_git_checkout_version == *"n2.8"* ]]; then
+          : # too old...
+        else
+          git apply "$work_dir/SVT-HEVC_git/ffmpeg_plugin/master-0001-lavc-svt_hevc-add-libsvt-hevc-encoder-wrapper.patch"
+        fi
+        config_options+=" --enable-libsvthevc"
+        config_options+=" --enable-libsvtav1"
+        # config_options+=" --enable-libsvtvp9"
+        #aom must be disabled to use SVT-AV1, just below
+        #config_options+=" --enable-libsvtav1" #not currently working but compiles if configured
+
+        #config_options+=" --enable-libvpx"
+        #config_options+=" --enable-libsvtvp9" #not currently working but compiles if configured
+      fi # else doesn't work/matter with 32 bit
     fi
-
-    #aom must be disabled to use SVT-AV1
     config_options+=" --enable-libaom"
-    #config_options+=" --enable-libsvtav1" #not currently working but compiles if configured
-
-    #libxvid must be disabled to use SVT-VP9 (26 lines below); working alongside libvpx was added in https://github.com/OpenVisualCloud/SVT-VP9/pull/71 so vpx no longer needs to be disabled
-    config_options+=" --enable-libvpx"
-    #config_options+=" --enable-libsvtvp9" #not currently working but compiles if configured
 
     if [[ $compiler_flavors != "native" ]]; then
       config_options+=" --enable-nvenc --enable-nvdec" # don't work OS X
@@ -2364,6 +2373,8 @@ build_ffmpeg() {
 
     config_options+=" --extra-libs=-lharfbuzz" #  grr...needed for pre x264 build???
     config_options+=" --extra-libs=-lm" # libflite seemed to need this linux native...and have no .pc file huh?
+    config_options+=" --extra-libs=-lshlwapi" # lame needed this, no .pc file?
+    config_options+=" --extra-libs=-lmpg123" # ditto
     config_options+=" --extra-libs=-lpthread" # for some reason various and sundry needed this linux native
 
     config_options+=" --extra-cflags=-DLIBTWOLAME_STATIC --extra-cflags=-DMODPLUG_STATIC --extra-cflags=-DCACA_STATIC" # if we ever do a git pull then it nukes changes, which overrides manual changes to configure, so just use these for now :|
@@ -2579,7 +2590,8 @@ build_ffmpeg_dependencies() {
   build_libspeex # Uses libspeexdsp and dlfcn.
   build_libtheora # Needs libogg >= 1.1. Needs libvorbis >= 1.0.1, sdl and libpng for test, programs and examples [disabled]. Uses dlfcn.
   build_libsndfile "install-libgsm" # Needs libogg >= 1.1.3 and libvorbis >= 1.2.3 for external support [disabled]. Uses dlfcn. 'build_libsndfile "install-libgsm"' to install the included LibGSM 6.10.
-  build_lame # Uses dlfcn.
+  build_mpg123
+  build_lame # Uses dlfcn, mpg123
   build_twolame # Uses libsndfile >= 1.0.0 and dlfcn.
   build_libopencore # Uses dlfcn.
   build_libilbc # Uses dlfcn.
@@ -2595,7 +2607,7 @@ build_ffmpeg_dependencies() {
   build_libsamplerate # Needs libsndfile >= 1.0.6 and fftw >= 0.15.0 for tests. Uses dlfcn.
   build_librubberband # Needs libsamplerate, libsndfile, fftw and vamp_plugin. 'configure' will fail otherwise. Eventhough librubberband doesn't necessarily need them (libsndfile only for 'rubberband.exe' and vamp_plugin only for "Vamp audio analysis plugin"). How to use the bundled libraries '-DUSE_SPEEX' and '-DUSE_KISSFFT'?
   build_frei0r # Needs dlfcn. could use opencv...
-  if [ "$bits_target" != "32" ]; then
+  if [[ "$bits_target" != "32" && $build_svt = "y" ]]; then
     build_svt-hevc
     build_svt-av1
     build_svt-vp9
@@ -2720,6 +2732,7 @@ enable_gpl=y
 build_x264_with_libav=n # To build x264 with Libavformat.
 ffmpeg_git_checkout="https://github.com/FFmpeg/FFmpeg.git"
 ffmpeg_source_dir=
+build_svt=y
 
 # parse command line parameters, if any
 while true; do
@@ -2743,7 +2756,8 @@ while true; do
       --build-vlc=n [builds a [rather bloated] vlc.exe]
       --build-lsw=n [builds L-Smash Works VapourSynth and AviUtl plugins]
       --build-ismindex=n [builds ffmpeg utility ismindex.exe]
-      -a 'build all' builds ffmpeg, mplayer, vlc, etc. with all fixings turned on
+      -a 'build all' builds ffmpeg, mplayer, vlc, etc. with all fixings turned on [many disabled from disuse these days]
+      --build-svt=n [builds libsvt-hevc modules within ffmpeg etc.]
       --build-dvbtee=n [build dvbtee.exe a DVB profiler]
       --compiler-flavors=[multi,win32,win64,native] [default prompt, or skip if you already have one built, multi is both win32 and win64]
       --cflags=[default is $original_cflags, which works on any cpu, see README for options]
@@ -2779,6 +2793,7 @@ while true; do
     -a         ) compiler_flavors="multi"; build_mplayer=n; build_libmxf=y; build_mp4box=y; build_vlc=y; build_lsw=y;
                  build_ffmpeg_static=y; build_ffmpeg_shared=y; build_lws=y; disable_nonfree=n; git_get_latest=y;
                  sandbox_ok=y; build_amd_amf=y; build_intel_qsv=y; build_dvbtee=y; build_x264_with_libav=y; shift ;;
+    --build-svt=* ) build_svt="${1#*=}"; shift ;;
     -d         ) gcc_cpu_count=$cpu_count; disable_nonfree="y"; sandbox_ok="y"; compiler_flavors="win64"; git_get_latest="n"; shift ;;
     --compiler-flavors=* )
          compiler_flavors="${1#*=}";
