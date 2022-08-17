@@ -13,7 +13,7 @@ I do have some "distribution release builds" of running the script here: https:/
 
 You can build the project on Linux with a cross compiler toolchain, taking about 2 hours for the "options" build. 
 
-Deploy a Linux VM on the host of your choice (> 14.04 for Ubuntu), or natively on an extra computer or a dual boot system, and also, you could even create a VM temporarily, on a hosting provider such as Digital Ocean.  Cheapest way: install windows 10 bash shell.  Another option: linux on a virtualbox VM.  Another option, typically fastest: temporarily rent a box (ex: DigitalOcean https://m.do.co/c/b3030b559d17 )
+Deploy a Linux VM on the host of your choice (>= 20.04 for Ubuntu), or natively on an extra computer or a dual boot system, and also, you could even create a VM temporarily, on a hosting provider such as Digital Ocean.  Cheapest way: install windows 10 bash shell.  Another option: linux on a virtualbox VM.  Another option, typically fastest: temporarily rent a box (ex: DigitalOcean or vultr or oracle cloud free ).  If you're on a "too old" version of linux you may have luck with building it inside a "docker" see the docker folder.  Else:
 
 Download the script by cloning this repository via git:
 
@@ -29,7 +29,9 @@ It should end up with a working, statically-built ffmpeg.exe binary within the "
 
 Another option instead of running `./cross_compile_ffmpeg.sh` is to run 
 
-    $ quick_build/quick_cross_compile_ffmpeg_fdk_aac_and_x264_using_packaged_mingw64.sh script.
+    $ quick_build/quick_cross_compile_ffmpeg_fdk_aac_and_x264_using_packaged_mingw64.sh
+    
+script.
 
 Note the "quick" part here which attempts to use the locally installed `mingw-w64` package from your distribution for the cross compiler, thus skipping the time-intensive cross-compiler toolchain build step.  It's not as well tested as running the normal one, however, which builds gcc from scratch.
 
