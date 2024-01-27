@@ -199,12 +199,12 @@ check_missing_packages () {
   #check if WSL
   # check WSL for interop setting make sure its disabled
   # check WSL for kernel version look for version 4.19.128 current as of 11/01/2020
-  if uname -a | grep  -q -- "-microsoft" ; then
+  if uname -a | grep  -iq -- "-microsoft" ; then
     if cat /proc/sys/fs/binfmt_misc/WSLInterop | grep -q enabled ; then
       echo "windows WSL detected: you must first disable 'binfmt' by running this
       sudo bash -c 'echo 0 > /proc/sys/fs/binfmt_misc/WSLInterop'
       then try again"
-      exit 1
+      #exit 1
     fi
     export MINIMUM_KERNEL_VERSION="4.19.128"
     KERNVER=$(uname -a | awk -F'[ ]' '{ print $3 }' | awk -F- '{ print $1 }')
@@ -216,7 +216,7 @@ check_missing_packages () {
     if [ $(version $KERNVER) -lt $(version $MINIMUM_KERNEL_VERSION) ]; then
       echo "Windows Subsystem for Linux (WSL) detected - kernel not at minumum version required: $MINIMUM_KERNEL_VERSION
       Please update via windows update then try again"
-      exit 1
+      #exit 1
     fi
     echo "for WSL ubuntu 20.04 you need to do an extra step https://github.com/rdp/ffmpeg-windows-build-helpers/issues/452"
   fi
@@ -351,7 +351,7 @@ install_cross_compiler() {
       if [[ `uname` =~ "5.1" ]]; then # Avoid using secure API functions for compatibility with msvcrt.dll on Windows XP.
         sed -i "s/ --enable-secure-api//" $zeranoe_script_name
       fi
-      nice ./$zeranoe_script_name $zeranoe_script_options --build-type=win32 || exit 1
+      CFLAGS=-O2 CXXFLAGS=-O2 nice ./$zeranoe_script_name $zeranoe_script_options --build-type=win32 || exit 1
       if [[ ! -f ../$win32_gcc ]]; then
         echo "Failure building 32 bit gcc? Recommend nuke sandbox (rm -rf sandbox) and start over..."
         exit 1
@@ -364,7 +364,7 @@ install_cross_compiler() {
     if [[ ($compiler_flavors == "win64" || $compiler_flavors == "multi") && ! -f ../$win64_gcc ]]; then
       echo "Building win64 x86_64 cross compiler..."
       download_gcc_build_script $zeranoe_script_name
-      nice ./$zeranoe_script_name $zeranoe_script_options --build-type=win64 || exit 1
+      CFLAGS=-O2 CXXFLAGS=-O2 nice ./$zeranoe_script_name $zeranoe_script_options --build-type=win64 || exit 1
       if [[ ! -f ../$win64_gcc ]]; then
         echo "Failure building 64 bit gcc? Recommend nuke sandbox (rm -rf sandbox) and start over..."
         exit 1
@@ -485,6 +485,7 @@ do_configure() {
       ./bootstrap.sh
     fi
     if [[ ! -f $configure_name ]]; then
+      echo "running autoreconf to generate configure file for us..."
       autoreconf -fiv # a handful of them require this to create ./configure :|
     fi
     rm -f already_* # reset
@@ -498,7 +499,8 @@ do_configure() {
 }
 
 do_make() {
-  local extra_make_options="$1 -j $cpu_count"
+  local extra_make_options="$1"
+  extra_make_options="$extra_make_options -j $cpu_count"
   local cur_dir2=$(pwd)
   local touch_name=$(get_small_touchfile_name already_ran_make "$extra_make_options" )
 
@@ -694,7 +696,9 @@ download_and_unpack_file() {
 }
 
 generic_configure() {
+  build_triple="${build_triple:-$(gcc -dumpmachine)}"
   local extra_configure_options="$1"
+  if [[ -n $build_triple ]]; then extra_configure_options+=" --build=$build_triple"; fi
   do_configure "--host=$host_target --prefix=$mingw_w64_x86_64_prefix --disable-shared --enable-static $extra_configure_options"
 }
 
@@ -845,7 +849,12 @@ build_amd_amf_headers() {
 }
 
 build_nv_headers() {
-  do_git_checkout https://github.com/FFmpeg/nv-codec-headers.git
+  if [[ $ffmpeg_git_checkout_version == *"n6.0"* ]] || [[ $ffmpeg_git_checkout_version == *"n5.1"* ]] || [[ $ffmpeg_git_checkout_version == *"n5.0"* ]] || [[ $ffmpeg_git_checkout_version == *"n4.4"* ]] || [[ $ffmpeg_git_checkout_version == *"n4.3"* ]] || [[ $ffmpeg_git_checkout_version == *"n4.2"* ]] || [[ $ffmpeg_git_checkout_version == *"n4.1"* ]] || [[ $ffmpeg_git_checkout_version == *"n3.4"* ]] || [[ $ffmpeg_git_checkout_version == *"n3.2"* ]] || [[ $ffmpeg_git_checkout_version == *"n2.8"* ]]; then
+    # nv_headers for old versions
+    do_git_checkout https://github.com/FFmpeg/nv-codec-headers.git nv-codec-headers_git n12.0.16.1
+  else
+    do_git_checkout https://github.com/FFmpeg/nv-codec-headers.git
+  fi
   cd nv-codec-headers_git
     do_make_install "PREFIX=$mingw_w64_x86_64_prefix" # just copies in headers
   cd ..
@@ -935,6 +944,7 @@ build_libtesseract() {
   build_libleptonica
   do_git_checkout https://github.com/tesseract-ocr/tesseract.git tesseract_git 4.1.1
   cd tesseract_git
+    sed -i.bak 's/libcurl/libbcurl_disabled/g' configure.ac # --disable-curl hard disable, sometimes it's here but they link it wrong so punt...
     if [[ $compiler_flavors != "native"  ]]; then
       apply_patch file://$patch_dir/tesseract-4.1.1_mingw-std-threads.patch
       generic_configure "--disable-openmp"
@@ -955,7 +965,7 @@ build_libzimg() {
 }
 
 build_libopenjpeg() {
-  do_git_checkout https://github.com/uclouvain/openjpeg.git # basically v2.3+
+  do_git_checkout https://github.com/uclouvain/openjpeg.git openjpeg_git v2.5.0
   cd openjpeg_git
     do_cmake_and_install "-DBUILD_CODEC=0"
   cd ..
@@ -1148,7 +1158,7 @@ build_gnutls() {
     generic_configure "--disable-doc --disable-tools --disable-cxx --disable-tests --disable-gtk-doc-html --disable-libdane --disable-nls --enable-local-libopts --disable-guile --with-included-libtasn1 --without-p11-kit"
     do_make_and_make_install
     if [[ $compiler_flavors != "native"  ]]; then
-      # libsrt doesn't know how to use its pkg deps :| https://github.com/Haivision/srt/issues/565
+      # libsrt doesn't know how to use its pkg deps, so put them in as non-static deps :| https://github.com/Haivision/srt/issues/565
       sed -i.bak 's/-lgnutls.*/-lgnutls -lcrypt32 -lnettle -lhogweed -lgmp -lidn2 -liconv -lunistring/' "$PKG_CONFIG_PATH/gnutls.pc"
       if [[ $OSTYPE == darwin* ]]; then
         sed -i.bak 's/-lgnutls.*/-lgnutls -framework Security -framework Foundation/' "$PKG_CONFIG_PATH/gnutls.pc"
@@ -1556,8 +1566,10 @@ build_librubberband() {
 }
 
 build_frei0r() {
-  do_git_checkout https://github.com/dyne/frei0r.git
-  cd frei0r_git
+  #do_git_checkout https://github.com/dyne/frei0r.git
+  #cd frei0r_git
+  download_and_unpack_file https://github.com/dyne/frei0r/archive/refs/tags/v2.3.0.tar.gz frei0r-2.3.0
+  cd frei0r-2.3.0
     sed -i.bak 's/-arch i386//' CMakeLists.txt # OS X https://github.com/dyne/frei0r/issues/64
     do_cmake_and_install "-DWITHOUT_OPENCV=1" # XXX could look at this more...
 
@@ -1593,15 +1605,6 @@ build_svt-hevc() {
 build_svt-av1() {
   do_git_checkout https://gitlab.com/AOMediaCodec/SVT-AV1.git
   cd SVT-AV1_git
-  cd Build
-    do_cmake_from_build_dir .. "-DCMAKE_BUILD_TYPE=Release -DCMAKE_SYSTEM_PROCESSOR=AMD64"
-    do_make_and_make_install
-  cd ../..
-}
-
-build_svt-vp9() {
-  do_git_checkout https://github.com/OpenVisualCloud/SVT-VP9.git
-  cd SVT-VP9_git
   cd Build
     do_cmake_from_build_dir .. "-DCMAKE_BUILD_TYPE=Release -DCMAKE_SYSTEM_PROCESSOR=AMD64"
     do_make_and_make_install
@@ -1644,7 +1647,14 @@ build_libcaca() {
 }
 
 build_libdecklink() {
-  do_git_checkout https://notabug.org/RiCON/decklink-headers.git
+  local url=https://notabug.org/RiCON/decklink-headers.git
+  git ls-remote $url
+  if [ $? -ne 0 ]; then
+    # If NotABug.org server is down , Change to use GitLab.com .
+    # https://gitlab.com/m-ab-s/decklink-headers
+    url=https://gitlab.com/m-ab-s/decklink-headers.git
+  fi
+  do_git_checkout $url
   cd decklink-headers_git
     do_make_install PREFIX=$mingw_w64_x86_64_prefix
   cd ..
@@ -1672,9 +1682,7 @@ build_fribidi() {
 }
 
 build_libsrt() {
-  # do_git_checkout https://github.com/Haivision/srt.git
-  #cd srt_git
-  #download_and_unpack_file https://codeload.github.com/Haivision/srt/tar.gz/v1.3.2 srt-1.3.2
+  # do_git_checkout https://github.com/Haivision/srt.git # might be able to use these days...?
   download_and_unpack_file https://github.com/Haivision/srt/archive/v1.4.1.tar.gz srt-1.4.1
   cd srt-1.4.1
     if [[ $compiler_flavors != "native" ]]; then
@@ -1697,6 +1705,16 @@ build_libaribb24() {
   cd aribb24
     generic_configure_make_install
   cd ..
+}
+
+build_libaribcaption() {
+  do_git_checkout https://github.com/xqq/libaribcaption
+  cd libaribcaption
+  mkdir build
+  cd build
+  do_cmake_from_build_dir .. "-DCMAKE_BUILD_TYPE=Release"
+  do_make_and_make_install
+  cd ../..
 }
 
 build_libxavs() {
@@ -2359,9 +2377,6 @@ build_ffmpeg() {
         config_options+=" --enable-libsvthevc"
       fi
       config_options+=" --enable-libsvtav1"
-      # SVT-VP9 see comments below
-      # git apply "$work_dir/SVT-VP9_git/ffmpeg_plugin/master-0001-Add-ability-for-ffmpeg-to-run-svt-vp9.patch"
-      # config_options+=" --enable-libsvtvp9" # not currently working but compiles if configured
     fi # else doesn't work/matter with 32 bit
     config_options+=" --enable-libvpx"
     config_options+=" --enable-libaom"
@@ -2391,6 +2406,12 @@ build_ffmpeg() {
     else
       config_options+=" --disable-libmfx"
     fi
+    
+    if [[ $ffmpeg_git_checkout_version != *"n6.0"* ]] && [[ $ffmpeg_git_checkout_version != *"n5.1"* ]] && [[ $ffmpeg_git_checkout_version != *"n5.0"* ]] && [[ $ffmpeg_git_checkout_version != *"n4.4"* ]] && [[ $ffmpeg_git_checkout_version != *"n4.3"* ]] && [[ $ffmpeg_git_checkout_version != *"n4.2"* ]] && [[ $ffmpeg_git_checkout_version != *"n4.1"* ]] && [[ $ffmpeg_git_checkout_version != *"n3.4"* ]] && [[ $ffmpeg_git_checkout_version != *"n3.2"* ]] && [[ $ffmpeg_git_checkout_version != *"n2.8"* ]]; then
+      # Disable libaribcatption on old versions
+      config_options+=" --enable-libaribcaption" # libaribcatption (MIT licensed)
+    fi
+    
     if [[ $enable_gpl == 'y' ]]; then
       config_options+=" --enable-gpl --enable-frei0r --enable-librubberband --enable-libvidstab --enable-libx264 --enable-libx265 --enable-avisynth --enable-libaribb24"
       config_options+=" --enable-libxvid --enable-libdavs2"
@@ -2616,7 +2637,6 @@ build_ffmpeg_dependencies() {
       build_svt-hevc
     fi
     build_svt-av1
-    #build_svt-vp9 # not currently working but compiles if configured
   fi
   build_vidstab
   #build_facebooktransform360 # needs modified ffmpeg to use it so not typically useful
@@ -2633,6 +2653,9 @@ build_ffmpeg_dependencies() {
 
   build_libxvid # FFmpeg now has native support, but libxvid still provides a better image.
   build_libsrt # requires gnutls, mingw-std-threads
+  if [[ $ffmpeg_git_checkout_version != *"n6.0"* ]] && [[ $ffmpeg_git_checkout_version != *"n5.1"* ]] && [[ $ffmpeg_git_checkout_version != *"n5.0"* ]] && [[ $ffmpeg_git_checkout_version != *"n4.4"* ]] && [[ $ffmpeg_git_checkout_version != *"n4.3"* ]] && [[ $ffmpeg_git_checkout_version != *"n4.2"* ]] && [[ $ffmpeg_git_checkout_version != *"n4.1"* ]] && [[ $ffmpeg_git_checkout_version != *"n3.4"* ]] && [[ $ffmpeg_git_checkout_version != *"n3.2"* ]] && [[ $ffmpeg_git_checkout_version != *"n2.8"* ]]; then
+    build_libaribcaption
+  fi
   build_libaribb24
   build_libtesseract
   build_lensfun  # requires png, zlib, iconv
@@ -2796,8 +2819,8 @@ while true; do
     --build-dvbtee=* ) build_dvbtee="${1#*=}"; shift ;;
     --disable-nonfree=* ) disable_nonfree="${1#*=}"; shift ;;
     # this doesn't actually "build all", like doesn't build 10 high-bit LGPL ffmpeg, but it does exercise the "non default" type build options...
-    -a         ) compiler_flavors="multi"; build_mplayer=n; build_libmxf=y; build_mp4box=n; build_vlc=y; build_lsw=y;
-                 build_ffmpeg_static=y; build_ffmpeg_shared=y; build_lws=y; disable_nonfree=n; git_get_latest=y;
+    -a         ) compiler_flavors="multi"; build_mplayer=n; build_libmxf=y; build_mp4box=n; build_vlc=y; build_lsw=n;
+                 build_ffmpeg_static=y; build_ffmpeg_shared=y; disable_nonfree=n; git_get_latest=y;
                  sandbox_ok=y; build_amd_amf=y; build_intel_qsv=y; build_dvbtee=y; build_x264_with_libav=y; shift ;;
     --build-svt-hevc=* ) build_svt_hevc="${1#*=}"; shift ;;
     -d         ) gcc_cpu_count=$cpu_count; disable_nonfree="y"; sandbox_ok="y"; compiler_flavors="win64"; git_get_latest="n"; shift ;;
